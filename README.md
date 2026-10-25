@@ -2,8 +2,6 @@
 
 A role-based school management web application built with **Django 5.2** (Templates + Forms). It provides separate portals for **Admin, Teacher, Student and Parent**, covering timetables, attendance, grades with PDF report cards, homework, and fee records.
 
-> **Note:** This is a learning/demo project. The `SECRET_KEY`, `DEBUG=True` setting and the demo passwords are for development only. Change them before any real deployment.
-
 ---
 
 ## Features
