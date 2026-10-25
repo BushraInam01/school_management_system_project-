@@ -1,0 +1,11 @@
+first_name,last_name,username,email,roll_no,class_name,section,parent_username,parent_email
+Ali,Ahmed,ali.ahmed,ali@example.com,R101,Grade 6,A,parent.ali,parent.ali@example.com
+Ayesha,Khan,ayesha.khan,ayesha@example.com,R102,Grade 6,A,parent.ayesha,parent.ayesha@example.com
+Bilal,Malik,bilal.malik,bilal@example.com,R103,Grade 6,A,parent.bilal,parent.bilal@example.com
+Fatima,Noor,fatima.noor,fatima@example.com,R104,Grade 6,A,parent.fatima,parent.fatima@example.com
+Hamza,Iqbal,hamza.iqbal,hamza@example.com,R105,Grade 6,A,parent.hamza,parent.hamza@example.com
+Hira,Ali,hira.ali,hira@example.com,R106,Grade 6,A,parent.hira,parent.hira@example.com
+Ibrahim,Raza,ibrahim.raza,ibrahim@example.com,R107,Grade 6,A,parent.ibrahim,parent.ibrahim@example.com
+Laiba,Shah,laiba.shah,laiba@example.com,R108,Grade 6,A,parent.laiba,parent.laiba@example.com
+Musa,Akram,musa.akram,musa@example.com,R109,Grade 6,A,parent.musa,parent.musa@example.com
+Zainab,Aslam,zainab.aslam,zainab@example.com,R110,Grade 6,A,parent.zainab,parent.zainab@example.com

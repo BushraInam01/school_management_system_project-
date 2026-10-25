@@ -1,0 +1,4 @@
+from django.urls import path
+from . import views
+app_name="homework"
+urlpatterns=[path("",views.list_homework,name="list"),path("new/",views.HomeworkCreate.as_view(),name="create"),path("<int:pk>/edit/",views.HomeworkUpdate.as_view(),name="edit"),path("<int:pk>/delete/",views.HomeworkDelete.as_view(),name="delete"),path("<int:homework_id>/submit/",views.submit,name="submit"),path("<int:homework_id>/submissions/<int:submission_id>/",views.submission_detail,name="submission_detail"),path("<int:homework_id>/tracking/",views.tracking,name="tracking"),path("<int:homework_id>/submissions/<int:submission_id>/review/",views.review,name="review")]

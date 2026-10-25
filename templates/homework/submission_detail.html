@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Submission / Review</h1>
+<dl class="row">
+  <dt class="col-sm-3">Homework</dt><dd class="col-sm-9">{{ submission.homework.title }}</dd>
+  <dt class="col-sm-3">Class</dt><dd class="col-sm-9">{{ submission.homework.classroom }}</dd>
+  <dt class="col-sm-3">Subject</dt><dd class="col-sm-9">{{ submission.homework.subject }}</dd>
+  <dt class="col-sm-3">Due date</dt><dd class="col-sm-9">{{ submission.homework.due_date }}</dd>
+  <dt class="col-sm-3">Submitted date</dt><dd class="col-sm-9">{{ submission.submitted_at|default:'Not submitted' }}</dd>
+  <dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ submission.get_status_display }}</dd>
+  <dt class="col-sm-3">Submitted text</dt><dd class="col-sm-9">{{ submission.text|default:'No text submitted'|linebreaksbr }}</dd>
+  <dt class="col-sm-3">Submitted file</dt><dd class="col-sm-9">{% if submission.file %}<a href="{{ submission.file.url }}">Download submission</a>{% else %}No file submitted{% endif %}</dd>
+  {% if submission.status == 'reviewed' %}
+    <dt class="col-sm-3">Marks</dt><dd class="col-sm-9">{% if marks_total %}{{ submission.marks }} / {{ marks_total }}{% else %}{{ submission.marks }}{% endif %}</dd>
+    <dt class="col-sm-3">Teacher feedback</dt><dd class="col-sm-9">{{ submission.feedback|default:'No feedback provided'|linebreaksbr }}</dd>
+  {% else %}
+    <dt class="col-sm-3">Review</dt><dd class="col-sm-9">Awaiting review</dd>
+  {% endif %}
+</dl>
+{% endblock %}
