@@ -201,7 +201,3 @@ The Django admin is available at `/admin/` (log in as `admin`) and uses **inline
 - Uploaded files are served by Django only when `DEBUG=True`. A production setup needs proper media file hosting.
 - Teachers cannot edit the timetable. Only the admin manages it, which avoids scheduling clashes.
 
----
-
-## License
-This project is for educational purposes.
