@@ -1,12 +1,15 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db.models import F, Prefetch
+from django.contrib.auth.decorators import login_required
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.views.generic import CreateView, DeleteView, UpdateView
 
 from accounts.mixins import RoleRequiredMixin
+from accounts.downloads import protected_file_response
 from academics.models import ClassSubject, Classroom
 from .forms import HomeworkForm, ReviewForm, SubmissionForm
 from .models import Homework, Submission
@@ -179,6 +182,42 @@ def submission_detail(request, homework_id, submission_id):
         "homework/submission_detail.html",
         {"submission": submission, "marks_total": getattr(submission.homework, "total_marks", None)},
     )
+
+
+@login_required
+def submission_download(request,submission_id):
+    submission=get_object_or_404(Submission.objects.select_related("homework__created_by","student__user"),pk=submission_id)
+    user=request.user
+    allowed=user.role=="admin"
+    if user.role=="student":
+        student=getattr(user,"student_profile",None)
+        allowed=bool(student and submission.student_id==student.pk)
+    elif user.role=="parent":
+        parent=getattr(user,"parent_profile",None)
+        allowed=bool(parent and submission.student.parents.filter(pk=parent.pk).exists())
+    elif user.role=="teacher":
+        allowed=submission.homework.created_by_id==user.pk
+    if not allowed:
+        raise PermissionDenied
+    return protected_file_response(submission.file,submission.file_original_name)
+
+
+@login_required
+def attachment_download(request,homework_id):
+    homework=get_object_or_404(Homework.objects.select_related("classroom","created_by"),pk=homework_id)
+    user=request.user
+    allowed=user.role=="admin"
+    if user.role=="student":
+        student=getattr(user,"student_profile",None)
+        allowed=bool(student and student.classroom_id==homework.classroom_id)
+    elif user.role=="parent":
+        parent=getattr(user,"parent_profile",None)
+        allowed=bool(parent and parent.children.filter(classroom_id=homework.classroom_id).exists())
+    elif user.role=="teacher":
+        allowed=homework.created_by_id==user.pk
+    if not allowed:
+        raise PermissionDenied
+    return protected_file_response(homework.attachment,homework.attachment_original_name)
 
 
 def tracking(request, homework_id):

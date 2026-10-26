@@ -15,7 +15,7 @@ class HomeworkForm(forms.ModelForm):
     class Meta:
         model = Homework
         fields = ("class_subject", "title", "description", "due_date", "attachment")
-        widgets = {"due_date": forms.DateInput(attrs={"type": "date"})}
+        widgets = {"due_date": forms.DateInput(attrs={"type": "date"}), "attachment": forms.FileInput}
 
     def __init__(self, *args, teacher=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -41,6 +41,7 @@ class SubmissionForm(forms.ModelForm):
     class Meta:
         model = Submission
         fields = ("file", "text")
+        widgets = {"file": forms.FileInput}
 
     def clean(self):
         cleaned = super().clean()

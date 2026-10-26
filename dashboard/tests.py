@@ -5,6 +5,10 @@ from django.urls import reverse
 
 from academics.models import Classroom
 from accounts.models import ParentProfile, StudentProfile, TeacherProfile, User
+from datetime import date
+from decimal import Decimal
+from academics.models import AcademicYear
+from fees.models import FeePayment, FeeStructure
 
 
 class DashboardAndSidebarTests(TestCase):
@@ -56,3 +60,24 @@ class DashboardAndSidebarTests(TestCase):
         for label in ("Students", "Teachers", "Parents", "Classrooms", "Subjects", "Class Subjects", "Academic Years", "Fee Summary", "Attendance Reports"):
             with self.subTest(label=label):
                 self.assertIn(f">{label}<", admin_content)
+
+    def test_dashboard_fee_totals_match_fee_summary_and_include_unpaid_students(self):
+        year = AcademicYear.objects.create(name="2026", start=date(2026, 1, 1), end=date(2026, 12, 31), is_current=True)
+        structure = FeeStructure.objects.create(classroom=self.classroom, fee_type="Tuition", amount=5000, academic_year=year)
+        admin = User.objects.create_user("feesadmin", role="admin")
+        for amount in (2000, 1000):
+            FeePayment.objects.create(student=self.student_profile, fee_structure=structure, amount_paid=amount, method=FeePayment.Method.CASH, received_by=admin)
+        StudentProfile.objects.create(user=User.objects.create_user("unpaid", role="student"), roll_no="R002", classroom=self.classroom, admission_date=date.today())
+        self.client.force_login(admin)
+        dashboard = self.client.get(reverse("dashboard:home"))
+        summary = self.client.get(reverse("fees:summary"))
+        self.assertEqual(dashboard.context["fees"], {"due": Decimal("10000.00"), "collected": Decimal("3000.00"), "pending": Decimal("7000.00")})
+        self.assertEqual(summary.context["totals"]["due"], dashboard.context["fees"]["due"])
+        self.assertEqual(summary.context["totals"]["paid"], dashboard.context["fees"]["collected"])
+        self.assertEqual(summary.context["totals"]["pending"], dashboard.context["fees"]["pending"])
+        self.client.force_login(self.student)
+        student_dashboard = self.client.get(reverse("dashboard:home"))
+        self.assertEqual(student_dashboard.context["fee_dues"], {"due": Decimal("5000.00"), "collected": Decimal("3000.00"), "pending": Decimal("2000.00")})
+        self.client.force_login(self.parent)
+        parent_dashboard = self.client.get(reverse("dashboard:home"))
+        self.assertEqual(parent_dashboard.context["child_cards"][0]["fee_due"], Decimal("2000.00"))

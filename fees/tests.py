@@ -34,7 +34,34 @@ class FeeWorkflowTests(TestCase):
         paid = self.payment("60.00")
         self.assertEqual(paid.status, FeePayment.Status.PAID)
         self.assertEqual(sum(payment.amount_paid for payment in FeePayment.objects.all()), Decimal("100.00"))
-        self.assertEqual(FeePayment.objects.filter(status=FeePayment.Status.PAID).count(), 3)
+        self.assertEqual(FeePayment.objects.filter(status=FeePayment.Status.PAID).count(), 1)
+        self.assertEqual(unpaid.status, FeePayment.Status.UNPAID)
+        self.assertEqual(partial.status, FeePayment.Status.PARTIAL)
+
+    def test_receipt_snapshot_survives_later_payment(self):
+        self.structure.amount = Decimal("5000.00"); self.structure.save()
+        first = self.payment("2000.00")
+        second = self.payment("3000.00")
+        first.refresh_from_db()
+        self.assertEqual(first.status, FeePayment.Status.PARTIAL)
+        self.assertEqual(first.balance_after, Decimal("3000.00"))
+        self.assertEqual(second.status, FeePayment.Status.PAID)
+        self.assertEqual(second.balance_after, Decimal("0.00"))
+        self.client.force_login(self.student.user)
+        response = self.client.get(reverse("fees:receipt", args=[first.pk]))
+        self.assertContains(response, "Partial")
+        self.assertContains(response, "3000.00")
+        lines = []
+        class FakeCanvas:
+            def __init__(self, _data): pass
+            def drawString(self, _x, _y, value): lines.append(value)
+            def showPage(self): pass
+            def save(self): pass
+        with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
+            pdf = self.client.get(reverse("fees:receipt_pdf", args=[first.pk]))
+        self.assertEqual(pdf.status_code, 200)
+        self.assertIn("Status: Partial", lines)
+        self.assertIn("Outstanding balance: 3000.00", lines)
 
     def test_overpayment_rejected(self):
         self.payment("80.00")

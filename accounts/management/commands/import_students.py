@@ -1,7 +1,11 @@
 """Import student and linked parent records from the documented CSV format."""
 import csv
+import io
 import secrets
 from datetime import date
+from pathlib import Path
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -11,8 +15,16 @@ class Command(BaseCommand):
     help="Import students: first_name,last_name,username,email,roll_no,class_name,section,parent_username,parent_email"
     def add_arguments(self, parser):
         parser.add_argument("csv_path"); parser.add_argument("--dry-run",action="store_true")
+        parser.add_argument("--credentials-file", metavar="PATH", help="Write created usernames and temporary passwords to a CSV file.")
+    def temporary_password(self, user):
+        while True:
+            password=secrets.token_urlsafe(18)+"A1!"
+            try: validate_password(password,user)
+            except ValidationError: continue
+            return password
     def handle(self,*args,**options):
         created=skipped=errors=0
+        credentials=[]
         call_command("setup_roles",verbosity=0)
         try: rows=list(csv.DictReader(open(options["csv_path"],newline="",encoding="utf-8")))
         except OSError as exc: raise CommandError(str(exc))
@@ -24,10 +36,25 @@ class Command(BaseCommand):
                 if User.objects.filter(username=row["username"]).exists() or StudentProfile.objects.filter(roll_no=row["roll_no"]).exists(): skipped+=1; continue
                 try: classroom=Classroom.objects.get(name=row["class_name"],section=row["section"])
                 except Classroom.DoesNotExist: self.stderr.write(f"Row {number}: classroom not found"); errors+=1; continue
-                student=User.objects.create_user(username=row["username"],email=row["email"],first_name=row["first_name"],last_name=row["last_name"],role="student",password=secrets.token_urlsafe(12))
+                student=User(username=row["username"],email=row["email"],first_name=row["first_name"],last_name=row["last_name"],role="student")
+                student_password=self.temporary_password(student)
+                student.set_password(student_password); student.save()
+                credentials.append((student.username,student_password))
                 profile=StudentProfile.objects.create(user=student,roll_no=row["roll_no"],classroom=classroom,admission_date=date.today())
                 parent,unused=User.objects.get_or_create(username=row["parent_username"],defaults={"email":row["parent_email"],"role":"parent"})
-                if unused: parent.set_password(secrets.token_urlsafe(12)); parent.save()
+                if unused:
+                    parent_password=self.temporary_password(parent)
+                    parent.set_password(parent_password); parent.save()
+                    credentials.append((parent.username,parent_password))
                 parent_profile,_=ParentProfile.objects.get_or_create(user=parent); profile.parents.add(parent_profile); created+=1
             if options["dry_run"]: transaction.set_rollback(True)
+        if not options["dry_run"] and credentials:
+            output=io.StringIO(newline="")
+            writer=csv.writer(output); writer.writerow(("username","temporary_password")); writer.writerows(credentials)
+            if options["credentials_file"]:
+                try: Path(options["credentials_file"]).write_text(output.getvalue(),encoding="utf-8",newline="")
+                except OSError as exc: raise CommandError(str(exc))
+            else:
+                self.stdout.write("Temporary login credentials (store securely):")
+                self.stdout.write(output.getvalue().rstrip())
         self.stdout.write(f"created={created} skipped={skipped} errors={errors}" + (" (rolled back)" if options["dry_run"] else ""))

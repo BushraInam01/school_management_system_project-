@@ -10,6 +10,13 @@ from accounts.models import StudentProfile
 from academics.models import Classroom
 from .forms import AttendanceFilterForm, AttendanceFormSet
 from .models import Attendance
+from school_project.query_params import safe_int
+
+def report_period(request):
+    today=timezone.localdate()
+    month=safe_int(request.GET.get("month"),today.month,minimum=1,maximum=12)
+    year=safe_int(request.GET.get("year"),today.year,minimum=1900,maximum=2100)
+    return month,year
 
 def permitted_classrooms(user):
     if user.role == "admin": return Classroom.objects.all()
@@ -49,10 +56,9 @@ def mark(request):
 @login_required
 def report(request,student_id):
     student=get_object_or_404(StudentProfile.objects.select_related("user","classroom"),pk=student_id)
-    teacher=getattr(request.user,"teacher_profile",None) if request.user.role=="teacher" else None
-    allowed=request.user.role=="admin" or (request.user.role=="student" and student.user_id==request.user.id) or (request.user.role=="parent" and student.parents.filter(user=request.user).exists()) or (teacher is not None and student.classroom.class_teacher_id==teacher.id)
+    allowed=request.user.role=="admin" or (request.user.role=="student" and student.user_id==request.user.id) or (request.user.role=="parent" and student.parents.filter(user=request.user).exists()) or (request.user.role=="teacher" and permitted_classrooms(request.user).filter(pk=student.classroom_id).exists())
     if not allowed: raise PermissionDenied
-    month=int(request.GET.get("month",timezone.localdate().month)); year=int(request.GET.get("year",timezone.localdate().year))
+    month,year=report_period(request)
     records=student.attendance_records.filter(date__month=month,date__year=year)
     parent=getattr(request.user,"parent_profile",None) if request.user.role=="parent" else None
     children=parent.children.select_related("user") if parent else None
@@ -78,7 +84,7 @@ def my_report(request):
 def class_report(request, classroom_id):
     if request.user.role not in ("teacher", "admin"): raise PermissionDenied
     classroom=get_object_or_404(permitted_classrooms(request.user),pk=classroom_id)
-    month=int(request.GET.get("month",timezone.localdate().month)); year=int(request.GET.get("year",timezone.localdate().year))
+    month,year=report_period(request)
     students=classroom.students.select_related("user").annotate(present=Count("attendance_records",filter=Q(attendance_records__date__month=month,attendance_records__date__year=year,attendance_records__status="present")),absent=Count("attendance_records",filter=Q(attendance_records__date__month=month,attendance_records__date__year=year,attendance_records__status="absent")),late=Count("attendance_records",filter=Q(attendance_records__date__month=month,attendance_records__date__year=year,attendance_records__status="late")),leave=Count("attendance_records",filter=Q(attendance_records__date__month=month,attendance_records__date__year=year,attendance_records__status="leave")))
     for student in students:
         total=student.present+student.absent+student.late+student.leave; student.percentage=student.present*100/total if total else 0

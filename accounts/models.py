@@ -1,7 +1,10 @@
 """Identity and profile models."""
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import Group
 from django.core.validators import FileExtensionValidator
 from django.db import models
+from pathlib import PurePath
+from .uploads import student_photo_upload_to
 
 class User(AbstractUser):
     class Role(models.TextChoices):
@@ -10,6 +13,13 @@ class User(AbstractUser):
         STUDENT = "student", "Student"
         PARENT = "parent", "Parent"
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.STUDENT, db_index=True)
+    def save(self,*args,**kwargs):
+        if self.is_superuser:
+            self.role=self.Role.ADMIN
+        super().save(*args,**kwargs)
+        if self.is_superuser:
+            group,_=Group.objects.get_or_create(name="Admin")
+            self.groups.add(group)
     def __str__(self): return self.get_full_name() or self.username
 
 class ParentProfile(models.Model):
@@ -31,9 +41,14 @@ class StudentProfile(models.Model):
     classroom = models.ForeignKey("academics.Classroom", on_delete=models.PROTECT, related_name="students")
     date_of_birth = models.DateField(null=True, blank=True)
     admission_date = models.DateField()
-    photo = models.ImageField(upload_to="students/", blank=True, validators=[FileExtensionValidator(["jpg", "jpeg", "png"])])
+    photo = models.ImageField(upload_to=student_photo_upload_to, blank=True, validators=[FileExtensionValidator(["jpg", "jpeg", "png"])])
+    photo_original_name = models.CharField(max_length=255, blank=True)
     parents = models.ManyToManyField(ParentProfile, blank=True, related_name="children")
     class Meta:
         ordering = ("classroom", "roll_no")
         indexes = [models.Index(fields=["classroom", "roll_no"])]
     def __str__(self): return f"{self.user} ({self.roll_no})"
+    def save(self,*args,**kwargs):
+        if self.photo and not self.photo._committed:
+            self.photo_original_name=PurePath(self.photo.name).name
+        super().save(*args,**kwargs)

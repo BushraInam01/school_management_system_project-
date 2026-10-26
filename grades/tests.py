@@ -24,6 +24,28 @@ class GradeWorkflowTests(TestCase):
         self.assertEqual(self.client.post(url,self.payload()).status_code,302); self.assertEqual(Grade.objects.count(),2)
         Grade.objects.all().delete()
         response=self.client.post(url,self.payload("101")); self.assertEqual(response.status_code,200); self.assertContains(response,"Marks must be between")
+
+    def test_resaving_existing_grades_changes_only_submitted_grade(self):
+        first = Grade.objects.create(student=self.one, exam=self.exam, subject=self.subject, marks_obtained=90, total_marks=100, entered_by=self.teacher_user)
+        second = Grade.objects.create(student=self.two, exam=self.exam, subject=self.subject, marks_obtained=80, total_marks=100, entered_by=self.teacher_user)
+        self.client.force_login(self.teacher_user)
+        payload = {"class_subject": self.assignment.pk, "exam": self.exam.pk, "grades-TOTAL_FORMS": "2", "grades-INITIAL_FORMS": "2", "grades-MIN_NUM_FORMS": "0", "grades-MAX_NUM_FORMS": "1000",
+                   "grades-0-id": first.pk, "grades-0-student": self.one.pk, "grades-0-marks_obtained": "95", "grades-0-total_marks": "100", "grades-0-remarks": "changed",
+                   "grades-1-id": second.pk, "grades-1-student": self.two.pk, "grades-1-marks_obtained": "80", "grades-1-total_marks": "100", "grades-1-remarks": "fine"}
+        response = self.client.post(reverse("grades:entry"), payload)
+        self.assertEqual(response.status_code, 302)
+        first.refresh_from_db(); second.refresh_from_db()
+        self.assertEqual(first.marks_obtained, Decimal("95"))
+        self.assertEqual(second.marks_obtained, Decimal("80"))
+        payload["grades-0-marks_obtained"] = "101"
+        self.assertEqual(self.client.post(reverse("grades:entry"), payload).status_code, 200)
+
+    def test_invalid_exam_selection_returns_not_found(self):
+        self.client.force_login(self.teacher_user)
+        response = self.client.get(reverse("grades:entry"), {"class_subject": self.assignment.pk, "exam": 999999})
+        self.assertEqual(response.status_code, 404)
+        malformed = self.client.get(reverse("grades:entry"), {"class_subject": self.assignment.pk, "exam": "abc"})
+        self.assertEqual(malformed.status_code, 404)
     def test_boundaries_and_rank(self):
         self.assertEqual([Grade(marks_obtained=Decimal(v),total_marks=Decimal("100")).letter_grade for v in ("90","80","70","60","50","49")],["A+","A","B","C","D","F"])
         Grade.objects.create(student=self.one,exam=self.exam,subject=self.subject,marks_obtained=90,total_marks=100,entered_by=self.teacher_user)

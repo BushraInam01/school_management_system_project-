@@ -150,6 +150,9 @@ python manage.py import_students sample_students.csv --dry-run
 
 # Real import
 python manage.py import_students sample_students.csv
+
+# Save generated login credentials to a protected CSV instead of printing them
+python manage.py import_students sample_students.csv --credentials-file imported_credentials.csv
 ```
 
 **CSV columns:**
@@ -157,7 +160,18 @@ python manage.py import_students sample_students.csv
 first_name,last_name,username,email,roll_no,class_name,section,parent_username,parent_email
 ```
 
-The command validates every row, skips duplicates (username or roll number), creates the user, student profile and parent link, assigns groups, generates a temporary password, runs inside a transaction, and prints a summary of created / skipped / errors with row numbers. A sample file is included as `sample_students.csv`.
+The command validates every row, skips duplicates (username or roll number), creates the user, student profile and parent link, generates temporary passwords that pass Django's configured password validators, and runs inside a transaction. A real import prints usernames and temporary passwords, or writes them to `--credentials-file PATH`; protect and remove that file after distributing credentials. `--dry-run` never prints or writes credentials. Admins can choose passwords when creating student, teacher and parent accounts; on edits, blank password fields keep the existing password. Every logged-in user can change their password from the navigation bar. A sample file is included as `sample_students.csv`.
+
+## Environment settings
+
+The project runs without environment setup using development defaults. Optional environment variables are:
+
+- `SECRET_KEY`: Django secret key (default is a development-only key).
+- `DEBUG`: `1`, `true`, `yes` or `on` enables debug mode; other values disable it (default `1`).
+- `ALLOWED_HOSTS`: comma-separated host names (default empty).
+- `DATABASE_PATH`: SQLite database file path (default `db.sqlite3` in the project directory).
+
+Uploaded homework submissions, homework attachments and student photos are served through permission-checked application download views. In production, serve these files through the app or a permission-checked `X-Accel-Redirect`; do not expose the uploads directory as a public `/media/` folder.
 
 ---
 
@@ -165,7 +179,7 @@ The command validates every row, skips duplicates (username or roll number), cre
 ```bash
 python manage.py test
 ```
-The suite (68 tests) covers role permissions, URL-tampering isolation, attendance formsets, grade validation and ranking, PDF generation, homework rules, fee calculations, timetable clash validation, seeding and import commands, and an admin-access audit over all URLs.
+The suite (80 tests) covers role permissions, URL-tampering isolation, password and account workflows, attendance formsets, grade validation and ranking, PDF generation, homework rules, fee calculations, timetable clash validation, seeding and import commands, and an admin-access audit over all URLs.
 
 Other useful checks:
 ```bash

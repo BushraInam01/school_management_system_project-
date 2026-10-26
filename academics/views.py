@@ -26,7 +26,7 @@ class Removed(AdminOnly,DeleteView):
     template_name="academics/confirm_delete.html"
     def form_valid(self,form): messages.success(self.request,"Deleted successfully."); return super().form_valid(form)
 def crud(prefix,model,form,search,queryset=None):
-    key=prefix.lower(); query=queryset or model.objects.all()
+    key=prefix.lower(); query=queryset if queryset is not None else model.objects.all()
     return (type(prefix+"List",(SearchList,),{"model":model,"queryset":query,"search_fields":search,"title":prefix,"create_url":f"academics:{key}_create","edit_name":f"academics:{key}_update","delete_name":f"academics:{key}_delete"}),type(prefix+"Create",(Saved,CreateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Update",(Saved,UpdateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Delete",(Removed,),{"model":model,"success_url":reverse_lazy(f"academics:{key}_list")}))
 StudentList,StudentCreate,StudentUpdate,StudentDelete=crud("Student",StudentProfile,StudentForm,("roll_no","user__username"),StudentProfile.objects.select_related("user","classroom").prefetch_related("parents"))
 TeacherList,TeacherCreate,TeacherUpdate,TeacherDelete=crud("Teacher",TeacherProfile,TeacherForm,("employee_id","user__username"),TeacherProfile.objects.select_related("user").prefetch_related("subjects").order_by("pk"))

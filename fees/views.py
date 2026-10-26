@@ -111,8 +111,8 @@ def list_fees(request):
 def receipt(request, payment_id):
     payment = get_object_or_404(FeePayment.objects.select_related("student__user", "fee_structure"), pk=payment_id)
     if not request.user.is_authenticated or not permitted(request.user, payment): raise PermissionDenied
-    paid_so_far = (FeePayment.objects.filter(student=payment.student, fee_structure=payment.fee_structure, date__lte=payment.date).aggregate(total=Sum("amount_paid"))["total"] or Decimal("0.00")).quantize(CENT)
-    context = {"payment": payment, "paid_so_far": paid_so_far, "outstanding": (payment.amount_due - paid_so_far).quantize(CENT)}
+    paid_so_far = (payment.amount_due - payment.balance_after).quantize(CENT)
+    context = {"payment": payment, "paid_so_far": paid_so_far, "outstanding": payment.balance_after}
     return render(request, "fees/receipt.html", context)
 
 
@@ -121,8 +121,8 @@ def receipt_pdf(request, payment_id):
     payment = get_object_or_404(FeePayment.objects.select_related("student__user", "fee_structure"), pk=payment_id)
     if not request.user.is_authenticated or not permitted(request.user, payment): raise PermissionDenied
     data = BytesIO(); pdf = canvas.Canvas(data)
-    paid_so_far = (FeePayment.objects.filter(student=payment.student, fee_structure=payment.fee_structure, date__lte=payment.date).aggregate(total=Sum("amount_paid"))["total"] or Decimal("0.00")).quantize(CENT)
-    lines = ["School Management System", "FEE PAYMENT RECEIPT", f"Receipt number: {payment.receipt_no}", f"Payment date: {payment.date}", f"Student: {payment.student.user.get_full_name() or payment.student.user.username}", f"Roll number: {payment.student.roll_no}", f"Class: {payment.student.classroom}", f"Fee type: {payment.fee_structure.fee_type}", f"Payment method: {payment.get_method_display()}", f"Received by: {payment.received_by.get_full_name() or payment.received_by.username}", f"Total fee: {money(payment.amount_due)}", f"Amount paid this payment: {money(payment.amount_paid)}", f"Total paid so far: {money(paid_so_far)}", f"Outstanding balance: {money(payment.amount_due-paid_so_far)}", f"Status: {payment.get_status_display()}"]
+    paid_so_far = (payment.amount_due - payment.balance_after).quantize(CENT)
+    lines = ["School Management System", "FEE PAYMENT RECEIPT", f"Receipt number: {payment.receipt_no}", f"Payment date: {payment.date}", f"Student: {payment.student.user.get_full_name() or payment.student.user.username}", f"Roll number: {payment.student.roll_no}", f"Class: {payment.student.classroom}", f"Fee type: {payment.fee_structure.fee_type}", f"Payment method: {payment.get_method_display()}", f"Received by: {payment.received_by.get_full_name() or payment.received_by.username}", f"Total fee: {money(payment.amount_due)}", f"Amount paid this payment: {money(payment.amount_paid)}", f"Total paid so far: {money(paid_so_far)}", f"Outstanding balance: {money(payment.balance_after)}", f"Status: {payment.get_status_display()}"]
     y=780
     for line in lines:
         pdf.drawString(72,y,line); y-=16

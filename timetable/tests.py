@@ -1,13 +1,21 @@
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.urls import reverse
 from .models import TimeSlot, TimetableEntry
 from django.core.exceptions import ValidationError
 from datetime import date, time
 from accounts.models import ParentProfile, StudentProfile, TeacherProfile, User
 from academics.models import Classroom, ClassSubject, Subject
-class SlotTests(SimpleTestCase):
+class SlotTests(TestCase):
     def test_slot_end_must_follow_start(self):
         with self.assertRaises(ValidationError): TimeSlot(day=0,start_time=time(9),end_time=time(8)).clean()
+
+    def test_overlapping_slots_rejected_adjacent_allowed_and_edit_ignores_self(self):
+        base=TimeSlot.objects.create(day=0,start_time=time(9),end_time=time(10))
+        overlap=TimeSlot(day=0,start_time=time(9,30),end_time=time(10,30))
+        with self.assertRaises(ValidationError): overlap.full_clean()
+        adjacent=TimeSlot(day=0,start_time=time(10),end_time=time(11)); adjacent.full_clean()
+        base.start_time=time(9,15); base.full_clean()
 
 class TimetableAccessAndClashTests(TestCase):
     def setUp(self):
@@ -25,6 +33,25 @@ class TimetableAccessAndClashTests(TestCase):
         class_clash=TimetableEntry(classroom=self.class_a,subject=self.subject,teacher=self.teacher,timeslot=self.slot)
         with self.assertRaises(ValidationError): class_clash.full_clean()
         self.assertTrue(other_slot.pk)
+
+    def test_overlapping_slots_cannot_double_book_teacher_or_class(self):
+        overlapping=TimeSlot.objects.create(day=0,start_time=time(8,30),end_time=time(9,30))
+        teacher_clash=TimetableEntry(classroom=self.class_b,subject=self.subject,teacher=self.teacher,timeslot=overlapping)
+        with self.assertRaises(ValidationError): teacher_clash.full_clean()
+        other_subject=Subject.objects.create(name="Science",code="SCI")
+        ClassSubject.objects.create(classroom=self.class_a,subject=other_subject,teacher=self.other_teacher)
+        teacher_clash.classroom=self.class_a; teacher_clash.subject=other_subject; teacher_clash.teacher=self.other_teacher
+        with self.assertRaises(ValidationError): teacher_clash.full_clean()
+
+    def test_admin_slot_form_shows_overlap_error_and_grid_bad_classroom_is_safe(self):
+        from accounts.models import User
+        admin=User.objects.create_user("admin",role="admin")
+        TimeSlot.objects.create(day=0,start_time=time(9),end_time=time(10))
+        self.client.force_login(admin)
+        response=self.client.post(reverse("timetable:slot_create"),{"day":0,"start_time":"09:30","end_time":"10:30"})
+        self.assertEqual(response.status_code,200)
+        self.assertContains(response,"overlap",status_code=200)
+        self.assertEqual(self.client.get(reverse("timetable:grid"),{"classroom":"xyz"}).status_code,200)
     def test_student_and_parent_grid_are_scoped(self):
         student_user=User.objects.create_user("s1",role="student"); student=StudentProfile.objects.create(user=student_user,roll_no="R1",classroom=self.class_a,admission_date=date.today())
         other_user=User.objects.create_user("s2",role="student"); StudentProfile.objects.create(user=other_user,roll_no="R2",classroom=self.class_b,admission_date=date.today())

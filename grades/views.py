@@ -12,6 +12,7 @@ from academics.models import ClassSubject
 from attendance.views import attendance_summary
 from .forms import GradeEntryFormSet, ReportCardRemarkForm, grade_formset
 from .models import Exam, Grade, ReportCardRemark
+from school_project.query_params import safe_int
 def can_access(user, student):
     teacher=getattr(user,"teacher_profile",None) if user.role=="teacher" else None
     return user.role=="admin" or (user.role=="student" and student.user_id==user.id) or (user.role=="parent" and student.parents.filter(user=user).exists()) or (teacher is not None and (student.classroom.class_teacher_id==teacher.id or student.classroom.class_subjects.filter(teacher=teacher).exists()))
@@ -40,25 +41,35 @@ def entry(request):
     assignments=allowed_assignments(request.user); class_subject_id=(request.POST or request.GET).get("class_subject"); exam_id=(request.POST or request.GET).get("exam")
     legacy_classroom_id=(request.POST or request.GET).get("classroom"); legacy_subject_id=(request.POST or request.GET).get("subject")
     if legacy_classroom_id or legacy_subject_id:
+        legacy_classroom_id=safe_int(legacy_classroom_id,minimum=1,maximum=2_147_483_647); legacy_subject_id=safe_int(legacy_subject_id,minimum=1,maximum=2_147_483_647)
         legacy_assignment=get_object_or_404(ClassSubject, classroom_id=legacy_classroom_id, subject_id=legacy_subject_id)
         if not assignments.filter(pk=legacy_assignment.pk).exists(): raise PermissionDenied
     selected=None; students=StudentProfile.objects.none(); queryset=Grade.objects.none()
     if class_subject_id and exam_id:
+        class_subject_id=safe_int(class_subject_id,minimum=1,maximum=2_147_483_647)
+        exam_id=safe_int(exam_id,minimum=1,maximum=2_147_483_647)
         selected=get_object_or_404(ClassSubject.objects.select_related("classroom","subject"),pk=class_subject_id)
         if not assignments.filter(pk=selected.pk).exists(): raise PermissionDenied
         students=StudentProfile.objects.filter(classroom=selected.classroom).select_related("user").order_by("roll_no")
-        existing=Grade.objects.filter(student__in=students,exam_id=exam_id,subject=selected.subject)
+        exam=get_object_or_404(Exam,pk=exam_id)
+        existing=Grade.objects.filter(student__in=students,exam=exam,subject=selected.subject).order_by("student__roll_no","student_id")
         existing_map={grade.student_id:grade for grade in existing}
         # Keep form rows in student order, including when only some grades already exist.
         initial=[{"marks_obtained":existing_map[student.pk].marks_obtained,"total_marks":existing_map[student.pk].total_marks,"remarks":existing_map[student.pk].remarks} if student.pk in existing_map else {"marks_obtained":"","total_marks":"100","remarks":""} for student in students]
-        formset=grade_formset(len(students))(request.POST or None,queryset=Grade.objects.none(),initial=initial,prefix="grades")
+        missing=[student.pk for student in students if student.pk not in existing_map]
+        formset=grade_formset(len(missing))(request.POST or None,queryset=existing,initial=[row for student,row in zip(students,initial) if student.pk not in existing_map],prefix="grades")
         if request.method=="POST" and formset.is_valid():
             forms=list(formset.forms)
             if len(forms) != len(students): formset._non_form_errors=formset.error_class(["Every student must have one grade row."])
             else:
                 with transaction.atomic():
-                    for student,form in zip(students,forms):
-                        Grade.objects.update_or_create(student=student,exam_id=exam_id,subject=selected.subject,defaults={"marks_obtained":form.cleaned_data["marks_obtained"],"total_marks":form.cleaned_data["total_marks"],"remarks":form.cleaned_data["remarks"],"entered_by":request.user})
+                    missing_order=list(StudentProfile.objects.filter(pk__in=missing).order_by("roll_no"))
+                    form_students=[grade.student for grade in existing]+missing_order
+                    for student,form in zip(form_students,forms):
+                        data=form.cleaned_data
+                        if not data or any(key not in data for key in ("marks_obtained","total_marks","remarks")):
+                            continue
+                        Grade.objects.update_or_create(student=student,exam=exam,subject=selected.subject,defaults={"marks_obtained":data["marks_obtained"],"total_marks":data["total_marks"],"remarks":data["remarks"],"entered_by":request.user})
                 messages.success(request,"Grades saved."); return redirect(f"{request.path}?class_subject={selected.pk}&exam={exam_id}")
     else: formset=GradeEntryFormSet(queryset=Grade.objects.none(),prefix="grades")
     return render(request,"grades/entry.html",{"assignments":assignments,"exams":Exam.objects.all(),"students":students,"formset":formset,"class_subject_id":str(class_subject_id or ""),"exam_id":str(exam_id or "")})
@@ -102,8 +113,9 @@ def report_pdf(request,student_id,exam_id):
         pdf.drawString(50,y-50,f"Teacher remarks: {data['remark'].teacher_remark[:100]}")
     if data["remark"] and data["remark"].principal_remark:
         pdf.drawString(50,y-65,f"Principal remarks: {data['remark'].principal_remark[:100]}")
-    pdf.drawString(50,100,"Class Teacher: __________________   Principal: __________________   Parent: __________________")
-    pdf.drawString(60,100,"Teacher signature: __________________   Principal signature: __________________"); pdf.showPage(); pdf.save(); buffer.seek(0)
+    for x,label in ((50,"Class Teacher"),(240,"Principal"),(430,"Parent")):
+        pdf.line(x,100,x+120,100); pdf.drawString(x,84,f"{label} signature")
+    pdf.showPage(); pdf.save(); buffer.seek(0)
     return FileResponse(buffer,content_type="application/pdf",as_attachment=True,filename=f"report-card-{student.roll_no}.pdf")
 
 @login_required

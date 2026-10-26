@@ -1,6 +1,10 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.storage import default_storage
+from django.test import override_settings
+from tempfile import TemporaryDirectory
 from django.test import TestCase
 from django.urls import reverse
 
@@ -29,6 +33,14 @@ class HomeworkWorkflowTests(TestCase):
         overdue = Homework.objects.create(classroom=self.classroom, subject=self.subject, title="Old", description="Solve", due_date=date.today() - timedelta(days=1), created_by=self.teacher_user)
         submission = Submission.objects.create(homework=overdue, student=self.first, text="done")
         self.assertEqual(submission.status, Submission.Status.LATE)
+
+    def test_lateness_uses_local_submission_date(self):
+        due = date(2026, 1, 1)
+        homework = Homework.objects.create(classroom=self.classroom, subject=self.subject, title="Local deadline", description="Solve", due_date=due, created_by=self.teacher_user)
+        next_day_early = Submission.objects.create(homework=homework, student=self.first, text="done", submitted_at=datetime(2026, 1, 2, 2, 0, tzinfo=ZoneInfo("Asia/Karachi")))
+        due_day_late = Submission.objects.create(homework=homework, student=self.second, text="done", submitted_at=datetime(2026, 1, 1, 23, 30, tzinfo=ZoneInfo("Asia/Karachi")))
+        self.assertEqual(next_day_early.status, Submission.Status.LATE)
+        self.assertEqual(due_day_late.status, Submission.Status.SUBMITTED)
 
     def test_upload_rejects_bad_extension_and_oversize_file(self):
         bad = SimpleUploadedFile("answer.exe", b"data")
@@ -164,3 +176,46 @@ class HomeworkWorkflowTests(TestCase):
         response = self.client.get(reverse("homework:submission_detail", args=[self.homework.pk, submission.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Awaiting review")
+
+    def test_submission_file_download_is_private_and_uses_opaque_filename(self):
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            submission=Submission.objects.create(homework=self.homework,student=self.first,text="answer",file=SimpleUploadedFile("my-answer.pdf",b"private bytes"))
+            self.assertNotIn("my-answer.pdf",submission.file.name)
+            url=reverse("homework:submission_download",args=[submission.pk])
+            self.client.force_login(self.first.user)
+            response=self.client.get(url); self.assertEqual(response.status_code,200); self.assertEqual(b"".join(response.streaming_content),b"private bytes")
+            self.assertEqual(self.client.get(f"/media/{submission.file.name}").status_code,404)
+            self.client.force_login(self.second.user); self.assertEqual(self.client.get(url).status_code,403)
+            parent_user=User.objects.create_user("linked-parent",role="parent"); parent=ParentProfile.objects.create(user=parent_user); self.first.parents.add(parent)
+            self.client.force_login(parent_user); self.assertEqual(self.client.get(url).status_code,200)
+            unlinked_user=User.objects.create_user("unlinked-parent",role="parent"); ParentProfile.objects.create(user=unlinked_user)
+            self.client.force_login(unlinked_user); self.assertEqual(self.client.get(url).status_code,403)
+            self.client.force_login(self.teacher_user); self.assertEqual(self.client.get(url).status_code,200)
+            self.client.force_login(self.other_teacher_user); self.assertEqual(self.client.get(url).status_code,403)
+            admin=User.objects.create_user("download-admin",role="admin")
+            self.client.force_login(admin); self.assertEqual(self.client.get(url).status_code,200)
+            self.client.logout(); self.assertEqual(self.client.get(url).status_code,302)
+
+    def test_homework_attachment_download_checks_classroom_and_owner(self):
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            self.homework.attachment=SimpleUploadedFile("worksheet.pdf",b"worksheet"); self.homework.save()
+            self.assertNotIn("worksheet.pdf",self.homework.attachment.name)
+            url=reverse("homework:attachment_download",args=[self.homework.pk])
+            self.client.force_login(self.first.user); self.assertEqual(self.client.get(url).status_code,200)
+            parent_user=User.objects.create_user("class-parent",role="parent"); parent=ParentProfile.objects.create(user=parent_user); self.first.parents.add(parent)
+            self.client.force_login(parent_user); self.assertEqual(self.client.get(url).status_code,200)
+            self.client.force_login(self.teacher_user); self.assertEqual(self.client.get(url).status_code,200)
+            self.client.force_login(self.other_teacher_user); self.assertEqual(self.client.get(url).status_code,403)
+            outside_user=User.objects.create_user("outside",role="student")
+            StudentProfile.objects.create(user=outside_user,roll_no="R99",classroom=self.other_classroom,admission_date=date.today())
+            self.client.force_login(outside_user); self.assertEqual(self.client.get(url).status_code,403)
+            admin=User.objects.create_user("attachment-admin",role="admin")
+            self.client.force_login(admin); self.assertEqual(self.client.get(url).status_code,200)
+            self.client.logout(); self.assertEqual(self.client.get(url).status_code,302)
+
+    def test_download_rejects_storage_path_outside_media_root(self):
+        submission=Submission.objects.create(homework=self.homework,student=self.first,text="answer")
+        Submission.objects.filter(pk=submission.pk).update(file="../secret.pdf")
+        self.client.force_login(self.first.user)
+        response=self.client.get(reverse("homework:submission_download",args=[submission.pk]))
+        self.assertEqual(response.status_code,404)

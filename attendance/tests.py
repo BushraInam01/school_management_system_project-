@@ -53,3 +53,27 @@ class AttendanceWorkflowTests(TestCase):
         Attendance.objects.create(student=self.first,date=self.day-timedelta(days=1),status="absent",marked_by=self.teacher_user)
         self.client.force_login(self.first.user); response=self.client.get(reverse("attendance:report",args=[self.first.pk]),{"month":self.day.month,"year":self.day.year})
         self.assertEqual(response.context["summary"]["percentage"],50)
+
+    def test_report_query_values_fall_back_safely(self):
+        self.client.force_login(self.first.user)
+        response=self.client.get(reverse("attendance:report",args=[self.first.pk]),{"month":"abc","year":"9999"})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.context["month"],date.today().month)
+        self.assertEqual(response.context["year"],date.today().year)
+        admin=User.objects.create_user("attendance-admin",role="admin")
+        self.client.force_login(admin)
+        response=self.client.get(reverse("attendance:class_report",args=[self.classroom.pk]),{"month":"13","year":"garbage"})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.context["month"],date.today().month)
+        self.assertEqual(response.context["year"],date.today().year)
+
+    def test_subject_teacher_and_class_teacher_share_individual_report_access(self):
+        self.client.force_login(self.teacher_user)
+        self.assertEqual(self.client.get(reverse("attendance:report",args=[self.first.pk])).status_code,200)
+        assigned_other_user=User.objects.create_user("teacher-other-class",role="teacher")
+        assigned_other=TeacherProfile.objects.create(user=assigned_other_user,employee_id="T3")
+        ClassSubject.objects.create(classroom=self.other_class,subject=self.classroom.class_subjects.first().subject,teacher=assigned_other)
+        self.client.force_login(assigned_other_user)
+        self.assertEqual(self.client.get(reverse("attendance:report",args=[self.first.pk])).status_code,403)
+        self.client.force_login(self.unassigned_user)
+        self.assertEqual(self.client.get(reverse("attendance:report",args=[self.first.pk])).status_code,403)

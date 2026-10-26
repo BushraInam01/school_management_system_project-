@@ -8,6 +8,7 @@ from accounts.mixins import RoleRequiredMixin
 from academics.models import Classroom
 from .forms import TimeSlotForm, TimetableEntryForm
 from .models import TimeSlot, TimetableEntry
+from school_project.query_params import safe_int
 @login_required
 def grid(request):
     qs=TimetableEntry.objects.select_related("classroom","subject","teacher__user","timeslot")
@@ -23,13 +24,17 @@ def grid(request):
     elif request.user.role=="parent":
         parent=getattr(request.user,"parent_profile",None)
         children=parent.children.select_related("user","classroom") if parent else []
-        child=children.filter(pk=request.GET.get("child")).first() or children.first()
+        child_id=safe_int(request.GET.get("child"),minimum=1,maximum=2_147_483_647)
+        child=children.filter(pk=child_id).first() or children.first()
         if child is None: return render(request,"timetable/grid.html",{"rows":[],"profile_message":"No children are linked to your account yet. Please contact a school administrator.","children":children})
         qs=qs.filter(classroom=child.classroom) if child else qs.none(); selected=child.pk if child else None
     elif request.user.role=="admin":
-        classrooms=Classroom.objects.all(); classroom_id=request.GET.get("classroom")
+        classrooms=Classroom.objects.all(); raw_classroom_id=request.GET.get("classroom")
+        classroom_id=safe_int(raw_classroom_id,minimum=1,maximum=2_147_483_647)
+        if raw_classroom_id and classroom_id is None:
+            messages.info(request,"Invalid classroom filter; showing all classrooms.")
         if classroom_id:
-            qs=qs.filter(classroom_id=classroom_id); selected=int(classroom_id)
+            qs=qs.filter(classroom_id=classroom_id); selected=classroom_id
     slots=list(TimeSlot.objects.order_by("start_time","end_time","day"))
     row_pairs=sorted({(slot.start_time,slot.end_time) for slot in slots})
     rows=[{"start":start,"end":end,"cells":{}} for start,end in row_pairs]

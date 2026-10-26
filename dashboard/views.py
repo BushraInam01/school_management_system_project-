@@ -16,12 +16,13 @@ from homework.models import Submission
 from timetable.models import TimetableEntry
 
 
-def fee_totals(queryset):
-    totals = queryset.aggregate(due=Sum("amount_due"), collected=Sum("amount_paid"))
-    due = totals["due"] or Decimal("0")
-    collected = totals["collected"] or Decimal("0")
-    due, collected = due.quantize(CENT), collected.quantize(CENT)
-    return {"due": due, "collected": collected, "pending": (due - collected).quantize(CENT)}
+def fee_totals(students):
+    from fees.views import fee_accounts
+    accounts = fee_accounts(students.select_related("classroom"))
+    due = sum((account["due"] for account in accounts), Decimal("0.00"))
+    collected = sum((account["paid"] for account in accounts), Decimal("0.00"))
+    pending = sum((account["outstanding"] for account in accounts), Decimal("0.00"))
+    return {"due": due.quantize(CENT), "collected": collected.quantize(CENT), "pending": pending.quantize(CENT)}
 
 
 def latest_result(student):
@@ -42,7 +43,7 @@ def home(request):
         today = timezone.localdate()
         attendance = Attendance.objects.filter(date=today).aggregate(present=Count("id", filter=Q(status=Attendance.Status.PRESENT)), absent=Count("id", filter=Q(status=Attendance.Status.ABSENT)))
         context["today_attendance"] = {"present": attendance["present"], "absent": attendance["absent"], "not_marked": max(StudentProfile.objects.count() - Attendance.objects.filter(date=today).values("student_id").distinct().count(), 0)}
-        context["fees"] = fee_totals(FeePayment.objects.all())
+        context["fees"] = fee_totals(StudentProfile.objects.all())
         context["recent_payments"] = FeePayment.objects.select_related("student__user", "fee_structure").order_by("-date", "-id")[:5]
         context["recent_students"] = StudentProfile.objects.select_related("user", "classroom").order_by("-id")[:5]
     elif user.role == "teacher":
@@ -59,7 +60,7 @@ def home(request):
         if student is None:
             context["profile_message"] = "Your student profile is not set up yet. Please contact a school administrator."
             return render(request, "dashboard/home.html", context)
-        context.update(student=student, attendance_summary=attendance_summary(student.attendance_records.all()), pending_homework=student.submissions.filter(status=Submission.Status.PENDING).count(), latest_result=latest_result(student), fee_dues=fee_totals(student.fee_payments.all()))
+        context.update(student=student, attendance_summary=attendance_summary(student.attendance_records.all()), pending_homework=student.submissions.filter(status=Submission.Status.PENDING).count(), latest_result=latest_result(student), fee_dues=fee_totals(StudentProfile.objects.filter(pk=student.pk)))
     elif user.role == "parent":
         parent = getattr(user, "parent_profile", None)
         children = list(parent.children.select_related("user", "classroom")) if parent else []
@@ -69,8 +70,10 @@ def home(request):
         child_ids = [child.pk for child in children]
         attendance = Attendance.objects.filter(student_id__in=child_ids).values("student_id").annotate(total=Count("id"), present=Count("id", filter=Q(status=Attendance.Status.PRESENT)))
         attendance_by_student = {item["student_id"]: item for item in attendance}
-        payments = FeePayment.objects.filter(student_id__in=child_ids).values("student_id").annotate(due=Sum("amount_due"), collected=Sum("amount_paid"))
-        payments_by_student = {item["student_id"]: item for item in payments}
+        from fees.views import fee_accounts
+        payments_by_student = {child.pk: {"outstanding": Decimal("0.00")} for child in children}
+        for account in fee_accounts(children):
+            payments_by_student[account["student"].pk]["outstanding"] += account["outstanding"]
         grade_rows = Grade.objects.filter(student_id__in=child_ids).values("student_id", "exam_id", "exam__start_date", "marks_obtained", "total_marks").order_by("student_id", "-exam__start_date", "-exam_id")
         results = {}
         for row in grade_rows:
@@ -86,7 +89,7 @@ def home(request):
                 result["exam"] = exams_by_id[result["exam_id"]]
                 result["percentage"] = result["earned"] * 100 / result["total"] if result["total"] else Decimal("0")
             total, present = record.get("total", 0), record.get("present", 0)
-            child_cards.append({"child": child, "attendance_percentage": present * 100 / total if total else 0, "result": result, "fee_due": ((payment.get("due") or Decimal("0.00")) - (payment.get("collected") or Decimal("0.00"))).quantize(CENT)})
+            child_cards.append({"child": child, "attendance_percentage": present * 100 / total if total else 0, "result": result, "fee_due": payment["outstanding"].quantize(CENT)})
         context["child_cards"] = child_cards
         context["show_child_switcher"] = len(children) > 1
     return render(request, "dashboard/home.html", context)

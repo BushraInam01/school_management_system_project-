@@ -12,6 +12,9 @@ class TimeSlot(models.Model):
         constraints=[models.UniqueConstraint(fields=["day","start_time","end_time"],name="unique_slot")]
     def clean(self):
         if self.start_time >= self.end_time: raise ValidationError("End time must be after start time.")
+        overlaps=TimeSlot.objects.filter(day=self.day,start_time__lt=self.end_time,end_time__gt=self.start_time)
+        if self.pk: overlaps=overlaps.exclude(pk=self.pk)
+        if overlaps.exists(): raise ValidationError("This time slot overlaps another slot on the same day.")
     def __str__(self): return f"{self.get_day_display()} {self.start_time:%H:%M}-{self.end_time:%H:%M}"
 
 class TimetableEntry(models.Model):
@@ -27,4 +30,14 @@ class TimetableEntry(models.Model):
         from academics.models import ClassSubject
         if not ClassSubject.objects.filter(classroom=self.classroom,subject=self.subject,teacher=self.teacher).exists():
             raise ValidationError("Teacher must be assigned to this classroom and subject.")
+        if not self.timeslot_id or not self.teacher_id or not self.classroom_id: return
+        slot=self.timeslot
+        conflicts=TimetableEntry.objects.filter(
+            timeslot__day=slot.day,
+            timeslot__start_time__lt=slot.end_time,
+            timeslot__end_time__gt=slot.start_time,
+        ).filter(models.Q(teacher_id=self.teacher_id)|models.Q(classroom_id=self.classroom_id))
+        if self.pk: conflicts=conflicts.exclude(pk=self.pk)
+        if conflicts.exists():
+            raise ValidationError("This teacher or classroom is already booked during an overlapping time slot.")
     def __str__(self): return f"{self.classroom} {self.subject} {self.timeslot}"
