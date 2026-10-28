@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.db.models import Q
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 from accounts.mixins import RoleRequiredMixin
@@ -25,9 +26,22 @@ class Saved(AdminOnly):
 class Removed(AdminOnly,DeleteView):
     template_name="academics/confirm_delete.html"
     def form_valid(self,form): messages.success(self.request,"Deleted successfully."); return super().form_valid(form)
+
+class StudentDeleteView(AdminOnly, DeleteView):
+    model = StudentProfile
+    template_name = "academics/confirm_delete.html"
+    success_url = reverse_lazy("academics:student_list")
+    def form_valid(self, form):
+        student = self.get_object()
+        student.archive()
+        messages.success(self.request, f"Student {student} archived successfully. Historical academic and financial records have been preserved.")
+        return redirect(self.success_url)
+
 def crud(prefix,model,form,search,queryset=None):
     key=prefix.lower(); query=queryset if queryset is not None else model.objects.all()
-    return (type(prefix+"List",(SearchList,),{"model":model,"queryset":query,"search_fields":search,"title":prefix,"create_url":f"academics:{key}_create","edit_name":f"academics:{key}_update","delete_name":f"academics:{key}_delete"}),type(prefix+"Create",(Saved,CreateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Update",(Saved,UpdateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Delete",(Removed,),{"model":model,"success_url":reverse_lazy(f"academics:{key}_list")}))
+    delete_cls = StudentDeleteView if model is StudentProfile else Removed
+    return (type(prefix+"List",(SearchList,),{"model":model,"queryset":query,"search_fields":search,"title":prefix,"create_url":f"academics:{key}_create","edit_name":f"academics:{key}_update","delete_name":f"academics:{key}_delete"}),type(prefix+"Create",(Saved,CreateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Update",(Saved,UpdateView),{"model":model,"form_class":form,"success_url":reverse_lazy(f"academics:{key}_list")}),type(prefix+"Delete",(delete_cls,),{"model":model,"success_url":reverse_lazy(f"academics:{key}_list")}))
+
 StudentList,StudentCreate,StudentUpdate,StudentDelete=crud("Student",StudentProfile,StudentForm,("roll_no","user__username"),StudentProfile.objects.select_related("user","classroom").prefetch_related("parents"))
 TeacherList,TeacherCreate,TeacherUpdate,TeacherDelete=crud("Teacher",TeacherProfile,TeacherForm,("employee_id","user__username"),TeacherProfile.objects.select_related("user").prefetch_related("subjects").order_by("pk"))
 ParentList,ParentCreate,ParentUpdate,ParentDelete=crud("Parent",ParentProfile,ParentForm,("user__username","phone"),ParentProfile.objects.select_related("user").order_by("pk"))

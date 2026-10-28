@@ -23,7 +23,8 @@ class Homework(models.Model):
         """A teacher may only publish work for an assigned class/subject."""
         if self.created_by_id and self.created_by.role == "teacher":
             from academics.models import ClassSubject
-            if not ClassSubject.objects.filter(classroom_id=self.classroom_id, subject_id=self.subject_id, teacher=self.created_by.teacher_profile).exists():
+            teacher = getattr(self.created_by, "teacher_profile", None)
+            if not teacher or not ClassSubject.objects.filter(classroom_id=self.classroom_id, subject_id=self.subject_id, teacher=teacher).exists():
                 raise ValidationError("You are not assigned to this class and subject.")
     def save(self,*args,**kwargs):
         if self.attachment and not self.attachment._committed:
@@ -34,7 +35,7 @@ class Homework(models.Model):
 class Submission(models.Model):
     class Status(models.TextChoices): PENDING="pending","Pending"; SUBMITTED="submitted","Submitted"; LATE="late","Late"; REVIEWED="reviewed","Reviewed"
     homework=models.ForeignKey(Homework,on_delete=models.CASCADE,related_name="submissions")
-    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.CASCADE,related_name="submissions")
+    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.PROTECT,related_name="submissions")
     file=models.FileField(upload_to=submission_upload_to,blank=True,validators=[validate_upload_size,FileExtensionValidator(["pdf","doc","docx","jpg","png","txt"])])
     file_original_name=models.CharField(max_length=255,blank=True)
     text=models.TextField(blank=True)

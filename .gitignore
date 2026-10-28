@@ -1,8 +1,35 @@
+# Local environment and secret configuration
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# Local SQLite databases
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+
+# Virtual environments
 .venv/
 venv/
-db.sqlite3
+env/
+ENV/
+
+# Media uploads containing private documents/photos
 media/
+
+# Python cache and bytecode
 __pycache__/
 *.py[cod]
-.env
+*$py.class
+*.so
+
+# Credentials, logs, and temporary files
 *credentials*.csv
+*.log
+local_settings.py
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db

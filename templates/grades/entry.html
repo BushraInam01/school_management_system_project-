@@ -1,1 +1,90 @@
-{% extends 'base.html' %}{% block content %}<h1>Bulk grade entry</h1>{% if assignments %}<form method="get"><label for="class-subject">Class and subject</label><select id="class-subject" name="class_subject">{% for assignment in assignments %}<option value="{{ assignment.id }}" {% if class_subject_id == assignment.id|stringformat:'s' %}selected{% endif %}>{{ assignment.classroom }}: {{ assignment.subject.name }}</option>{% endfor %}</select><select name="exam">{% for exam in exams %}<option value="{{ exam.id }}" {% if exam_id == exam.id|stringformat:'s' %}selected{% endif %}>{{ exam }}</option>{% endfor %}</select><button>Load</button></form>{% else %}<p>No class and subject assignments are available.</p>{% endif %}{% if students %}<form method="post">{% csrf_token %}<input type="hidden" name="class_subject" value="{{ class_subject_id }}"><input type="hidden" name="exam" value="{{ exam_id }}">{{ formset.management_form }}{{ formset.non_form_errors }}<table class="table"><tr><th>Student</th><th>Marks</th><th>Total</th><th>Remarks</th></tr>{% for form in formset %}<tr><td>{{ forloop.counter }}{{ form.id }}{{ form.non_field_errors }}</td><td>{{ form.marks_obtained }}{{ form.marks_obtained.errors }}</td><td>{{ form.total_marks }}{{ form.total_marks.errors }}</td><td>{{ form.remarks }}</td></tr>{% endfor %}</table><button class="btn btn-primary">Save grades</button></form>{% endif %}{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Bulk grade entry</h1>
+</div>
+
+{% if assignments %}
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label for="class-subject" class="form-label">Class and Subject</label>
+                <select id="class-subject" name="class_subject" class="form-select">
+                    {% for assignment in assignments %}
+                    <option value="{{ assignment.id }}" {% if class_subject_id == assignment.id|stringformat:'s' %}selected{% endif %}>
+                        {{ assignment.classroom }}: {{ assignment.subject.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label for="exam-select" class="form-label">Examination</label>
+                <select id="exam-select" name="exam" class="form-select">
+                    {% for exam in exams %}
+                    <option value="{{ exam.id }}" {% if exam_id == exam.id|stringformat:'s' %}selected{% endif %}>
+                        {{ exam }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-secondary w-100">Load</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">No class and subject assignments are available.</div>
+{% endif %}
+
+{% if students %}
+<form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="class_subject" value="{{ class_subject_id }}">
+    <input type="hidden" name="exam" value="{{ exam_id }}">
+    {{ formset.management_form }}
+    {{ formset.non_form_errors }}
+    <div class="table-responsive">
+        <table class="table table-bordered table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 30%;">Student (Roll No. — Name)</th>
+                    <th style="width: 20%;">Marks Obtained</th>
+                    <th style="width: 20%;">Total Marks</th>
+                    <th style="width: 30%;">Remarks</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for form in formset %}
+                <tr>
+                    <td>
+                        {{ form.id }}
+                        {{ form.student_id }}
+                        <strong>{{ form.student.roll_no }}</strong> — {{ form.student.user.get_full_name|default:form.student.user.username }}
+                        {{ form.student_id.errors }}
+                        {{ form.non_field_errors }}
+                    </td>
+                    <td>
+                        {{ form.marks_obtained }}
+                        {{ form.marks_obtained.errors }}
+                    </td>
+                    <td>
+                        {{ form.total_marks }}
+                        {{ form.total_marks.errors }}
+                    </td>
+                    <td>
+                        {{ form.remarks }}
+                        {{ form.remarks.errors }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <button class="btn btn-primary mt-2">Save grades</button>
+</form>
+{% elif class_subject_id and exam_id %}
+<div class="alert alert-warning">No active students are currently enrolled in this classroom.</div>
+{% endif %}
+{% endblock %}

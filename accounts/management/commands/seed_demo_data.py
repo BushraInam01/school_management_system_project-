@@ -195,6 +195,10 @@ class Command(BaseCommand):
         # their fee structures, so remove them before deleting stale classrooms.
         stale_classrooms = Classroom.objects.exclude(pk__in=[item.pk for item in desired_classrooms])
         stale_students = StudentProfile.objects.filter(classroom__in=stale_classrooms)
+        Attendance.objects.filter(student__in=stale_students).delete()
+        Grade.objects.filter(student__in=stale_students).delete()
+        ReportCardRemark.objects.filter(student__in=stale_students).delete()
+        Submission.objects.filter(student__in=stale_students).delete()
         FeePayment.objects.filter(Q(student__in=stale_students) | Q(fee_structure__classroom__in=stale_classrooms)).delete()
         stale_students.delete()
         stale_classrooms.delete()
@@ -206,9 +210,19 @@ class Command(BaseCommand):
 
         # Keep exactly the current twenty demo students; deleting student21's
         # user also cascades all of that old demo student's dependent records.
+        s21 = StudentProfile.objects.filter(user__username="student21")
+        Attendance.objects.filter(student__in=s21).delete()
+        Grade.objects.filter(student__in=s21).delete()
+        ReportCardRemark.objects.filter(student__in=s21).delete()
+        Submission.objects.filter(student__in=s21).delete()
+        FeePayment.objects.filter(student__in=s21).delete()
         User.objects.filter(username="student21").delete()
         desired_student_usernames = {f"student{number}" for number in range(1, 21)}
         extra_students = StudentProfile.objects.exclude(user__username__in=desired_student_usernames)
+        Attendance.objects.filter(student__in=extra_students).delete()
+        Grade.objects.filter(student__in=extra_students).delete()
+        ReportCardRemark.objects.filter(student__in=extra_students).delete()
+        Submission.objects.filter(student__in=extra_students).delete()
         FeePayment.objects.filter(student__in=extra_students).delete()
         extra_students.delete()
         students = {}

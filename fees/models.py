@@ -19,7 +19,7 @@ class ReceiptSequence(models.Model):
 class FeePayment(models.Model):
     class Method(models.TextChoices): CASH="cash","Cash"; BANK="bank","Bank"; ONLINE="online","Online"
     class Status(models.TextChoices): PAID="paid","Paid"; PARTIAL="partial","Partial"; UNPAID="unpaid","Unpaid"
-    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.CASCADE,related_name="fee_payments")
+    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.PROTECT,related_name="fee_payments")
     fee_structure=models.ForeignKey(FeeStructure,on_delete=models.PROTECT,related_name="payments")
     amount_due=models.DecimalField(max_digits=10,decimal_places=2)
     amount_paid=models.DecimalField(max_digits=10,decimal_places=2,default=0)

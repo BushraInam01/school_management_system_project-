@@ -25,11 +25,19 @@ class ManagementCommandTests(TestCase):
         self.classroom = Classroom.objects.create(name="7", section="A")
 
     def run_import(self, content, *args):
-        with NamedTemporaryFile(mode="w", suffix=".csv", encoding="utf-8") as handle:
-            handle.write(content); handle.flush()
+        handle = NamedTemporaryFile(mode="w", suffix=".csv", encoding="utf-8", delete=False)
+        try:
+            handle.write(content)
+            handle.close()
             output, errors = StringIO(), StringIO()
             call_command("import_students", handle.name, *args, stdout=output, stderr=errors)
             return output.getvalue(), errors.getvalue()
+        finally:
+            import os
+            try:
+                os.unlink(handle.name)
+            except OSError:
+                pass
 
     def test_import_students_valid_file(self):
         output, errors = self.run_import(CSV_HEADER + "Ada,Lovelace,ada,ada@example.com,R001,7,A,parent-ada,parent@example.com\n")
@@ -54,6 +62,57 @@ class ManagementCommandTests(TestCase):
         output, _ = self.run_import(CSV_HEADER + "Ada,Lovelace,ada,ada@example.com,R001,7,A,parent-ada,parent@example.com\n", "--dry-run")
         self.assertIn("created=1 skipped=0 errors=0 (rolled back)", output)
         self.assertFalse(User.objects.filter(username="ada").exists())
+
+    def test_import_students_with_existing_valid_parent(self):
+        parent_user = User.objects.create_user("existing_p", email="p@example.com", password="Pass123!", role="parent")
+        p_profile = ParentProfile.objects.create(user=parent_user)
+        output, errors = self.run_import(CSV_HEADER + "Child,One,child1,c1@example.com,R100,7,A,existing_p,p@example.com\n")
+        self.assertIn("created=1 skipped=0 errors=0", output)
+        self.assertEqual(errors, "")
+        child_profile = StudentProfile.objects.get(roll_no="R100")
+        self.assertTrue(child_profile.parents.filter(user=parent_user).exists())
+        # Pre-existing parent credentials are NOT exposed in stdout
+        self.assertNotIn("existing_p", output)
+
+    def test_import_students_rejects_parent_username_belonging_to_student(self):
+        User.objects.create_user("student_user", role="student")
+        output, errors = self.run_import(CSV_HEADER + "Child,Two,child2,c2@example.com,R101,7,A,student_user,p@example.com\n")
+        self.assertIn("created=0 skipped=0 errors=1", output)
+        self.assertIn("incompatible role 'student'", errors)
+        self.assertFalse(ParentProfile.objects.filter(user__username="student_user").exists())
+        self.assertFalse(StudentProfile.objects.filter(roll_no="R101").exists())
+
+    def test_import_students_rejects_parent_username_belonging_to_teacher(self):
+        User.objects.create_user("teacher_user", role="teacher")
+        output, errors = self.run_import(CSV_HEADER + "Child,Three,child3,c3@example.com,R102,7,A,teacher_user,p@example.com\n")
+        self.assertIn("created=0 skipped=0 errors=1", output)
+        self.assertIn("incompatible role 'teacher'", errors)
+        self.assertFalse(ParentProfile.objects.filter(user__username="teacher_user").exists())
+        self.assertFalse(StudentProfile.objects.filter(roll_no="R102").exists())
+
+    def test_import_students_rejects_parent_username_belonging_to_admin(self):
+        User.objects.create_user("admin_user", role="admin")
+        output, errors = self.run_import(CSV_HEADER + "Child,Four,child4,c4@example.com,R103,7,A,admin_user,p@example.com\n")
+        self.assertIn("created=0 skipped=0 errors=1", output)
+        self.assertIn("incompatible role 'admin'", errors)
+        self.assertFalse(ParentProfile.objects.filter(user__username="admin_user").exists())
+        self.assertFalse(StudentProfile.objects.filter(roll_no="R103").exists())
+
+    def test_import_students_rejects_inactive_parent(self):
+        inactive_parent = User.objects.create_user("inactive_p", role="parent")
+        inactive_parent.is_active = False
+        inactive_parent.save()
+        output, errors = self.run_import(CSV_HEADER + "Child,Five,child5,c5@example.com,R104,7,A,inactive_p,p@example.com\n")
+        self.assertIn("created=0 skipped=0 errors=1", output)
+        self.assertIn("inactive account", errors)
+        self.assertFalse(StudentProfile.objects.filter(roll_no="R104").exists())
+
+    def test_repeated_import_skips_valid_data(self):
+        csv_data = CSV_HEADER + "Rep,Student,rep_stu,rep@example.com,R105,7,A,rep_parent,rep_p@example.com\n"
+        output1, _ = self.run_import(csv_data)
+        self.assertIn("created=1 skipped=0 errors=0", output1)
+        output2, _ = self.run_import(csv_data)
+        self.assertIn("created=0 skipped=1 errors=0", output2)
 
     def test_setup_roles_is_idempotent(self):
         call_command("setup_roles", verbosity=0)

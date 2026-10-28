@@ -1,8 +1,13 @@
+from decimal import Decimal
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import Group
 from django.core.management import call_command
 from django.core.exceptions import ValidationError
+from django.db.models import ProtectedError
+from attendance.models import Attendance
+from fees.models import FeePayment, FeeStructure
+from homework.models import Homework, Submission
 from django.test import override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.cache import cache
@@ -131,3 +136,177 @@ class ProtectedStudentPhotoTests(TestCase):
             self.client.force_login(admin); self.assertEqual(self.client.get(url).status_code,200)
             self.client.logout(); self.assertEqual(self.client.get(url).status_code,302)
             self.assertEqual(self.client.get(f"/media/{self.student.photo.name}").status_code,404)
+
+
+from django.core import mail
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ImproperlyConfigured
+from grades.models import Exam, Grade
+from academics.models import Subject
+
+
+class PasswordResetTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="resetuser",
+            email="resetuser@example.com",
+            password="OldPassword123!",
+            role="student",
+        )
+
+    def test_password_reset_flow_with_token_validation_and_invalidation(self):
+        # Request password reset
+        response = self.client.post(reverse("password_reset"), {"email": "resetuser@example.com"})
+        self.assertRedirects(response, reverse("password_reset_done"))
+        self.assertEqual(len(mail.outbox), 1)
+        email = mail.outbox[0]
+        self.assertIn("Password reset", email.subject)
+        self.assertIn("resetuser", email.body)
+
+        # Non-existent email returns same success redirect without leaking existence
+        mail.outbox.clear()
+        res_nonexistent = self.client.post(reverse("password_reset"), {"email": "nonexistent@example.com"})
+        self.assertRedirects(res_nonexistent, reverse("password_reset_done"))
+        self.assertEqual(len(mail.outbox), 0)
+
+        # Extract token and uid
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        reset_url = reverse("password_reset_confirm", kwargs={"uidb64": uid, "token": token})
+
+        # Confirm form page is accessible
+        get_confirm = self.client.get(reset_url, follow=True)
+        self.assertEqual(get_confirm.status_code, 200)
+
+        # Weak password rejected by validators
+        weak_post = self.client.post(
+            get_confirm.redirect_chain[-1][0] if get_confirm.redirect_chain else reset_url,
+            {"new_password1": "123", "new_password2": "123"},
+        )
+        self.assertEqual(weak_post.status_code, 200)
+        self.assertContains(weak_post, "too short")
+
+        # Strong valid password accepted
+        strong_post = self.client.post(
+            get_confirm.redirect_chain[-1][0] if get_confirm.redirect_chain else reset_url,
+            {"new_password1": "NewStrongPass99!", "new_password2": "NewStrongPass99!"},
+        )
+        self.assertRedirects(strong_post, reverse("password_reset_complete"))
+
+        # Verify login works with new password and fails with old password
+        self.assertFalse(self.client.login(username="resetuser", password="OldPassword123!"))
+        self.assertTrue(self.client.login(username="resetuser", password="NewStrongPass99!"))
+
+        # Token cannot be reused
+        reused_confirm = self.client.get(reset_url)
+        self.assertContains(reused_confirm, "invalid or has expired")
+
+
+class StudentArchivalAndProtectionTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("admin_arch", role="admin")
+        self.classroom = Classroom.objects.create(name="10", section="A")
+        self.student_user = User.objects.create_user("arch_student", password="Password123!", role="student")
+        self.student = StudentProfile.objects.create(
+            user=self.student_user, roll_no="ARCH1", classroom=self.classroom, admission_date=date.today()
+        )
+        self.parent_user = User.objects.create_user("arch_parent", role="parent")
+        self.parent = ParentProfile.objects.create(user=self.parent_user)
+        self.student.parents.add(self.parent)
+
+    def test_student_archive_sets_inactive_and_preserves_user_record(self):
+        self.student.archive()
+        self.student.refresh_from_db()
+        self.student_user.refresh_from_db()
+        self.assertFalse(self.student.is_active)
+        self.assertFalse(self.student_user.is_active)
+        # Parent remains active
+        self.parent_user.refresh_from_db()
+        self.assertTrue(self.parent_user.is_active)
+        # Archived student cannot log in
+        self.assertFalse(self.client.login(username="arch_student", password="Password123!"))
+
+    def test_academics_student_delete_view_archives_instead_of_cascading(self):
+        self.client.force_login(self.admin)
+        url = reverse("academics:student_delete", args=[self.student.pk])
+        response = self.client.post(url)
+        self.assertRedirects(response, reverse("academics:student_list"))
+        self.student.refresh_from_db()
+        self.student_user.refresh_from_db()
+        self.assertFalse(self.student.is_active)
+        self.assertFalse(self.student_user.is_active)
+        # Student record is still in the database, preserving all relationships
+        self.assertTrue(StudentProfile.objects.filter(pk=self.student.pk).exists())
+
+    def test_hard_deletion_prevented_when_historical_records_exist(self):
+        year = AcademicYear.objects.create(name="2026-A", start=date(2026, 1, 1), end=date(2026, 12, 31))
+        exam = Exam.objects.create(name="Midterm", academic_year=year, term="T1", start_date=date(2026, 3, 1))
+        subject = Subject.objects.create(name="History", code="HIST")
+        Grade.objects.create(
+            student=self.student,
+            exam=exam,
+            subject=subject,
+            marks_obtained=85,
+            total_marks=100,
+            entered_by=self.admin,
+        )
+        # Direct hard deletion must raise ValidationError or ProtectedError
+        with self.assertRaises((ValidationError, ProtectedError)):
+            self.student.delete()
+        # Student still exists
+        self.assertTrue(StudentProfile.objects.filter(pk=self.student.pk).exists())
+
+    def test_user_deletion_blocked_when_student_has_historical_records(self):
+        year = AcademicYear.objects.create(name="2026-B", start=date(2026, 1, 1), end=date(2026, 12, 31))
+        exam = Exam.objects.create(name="Midterm", academic_year=year, term="T1", start_date=date(2026, 3, 1))
+        subject = Subject.objects.create(name="Civics", code="CIV")
+        Grade.objects.create(
+            student=self.student, exam=exam, subject=subject, marks_obtained=90, total_marks=100, entered_by=self.admin
+        )
+        # Deleting User directly must raise ProtectedError because StudentProfile has protected Grade
+        with self.assertRaises(ProtectedError):
+            self.student_user.delete()
+        self.assertTrue(User.objects.filter(pk=self.student_user.pk).exists())
+        self.assertTrue(StudentProfile.objects.filter(pk=self.student.pk).exists())
+
+    def test_bulk_deletion_blocked_when_historical_records_exist(self):
+        year = AcademicYear.objects.create(name="2026-C", start=date(2026, 1, 1), end=date(2026, 12, 31))
+        Attendance.objects.create(
+            student=self.student, date=date.today(), status=Attendance.Status.PRESENT, marked_by=self.admin
+        )
+        # Bulk queryset deletion on StudentProfile is protected
+        with self.assertRaises(ProtectedError):
+            StudentProfile.objects.filter(pk=self.student.pk).delete()
+        # Bulk queryset deletion on User is protected
+        with self.assertRaises(ProtectedError):
+            User.objects.filter(pk=self.student_user.pk).delete()
+
+    def test_deleting_empty_student_without_records_is_permitted(self):
+        empty_user = User.objects.create_user("empty_stu", role="student")
+        empty_student = StudentProfile.objects.create(
+            user=empty_user, roll_no="EMPTY1", classroom=self.classroom, admission_date=date.today()
+        )
+        empty_student.delete()
+        self.assertFalse(StudentProfile.objects.filter(roll_no="EMPTY1").exists())
+
+    def test_historical_records_preserved_after_student_archival(self):
+        year = AcademicYear.objects.create(name="2026-D", start=date(2026, 1, 1), end=date(2026, 12, 31))
+        exam = Exam.objects.create(name="Final", academic_year=year, term="T1", start_date=date(2026, 3, 1))
+        subject = Subject.objects.create(name="Art", code="ART")
+        grade = Grade.objects.create(student=self.student, exam=exam, subject=subject, marks_obtained=95, total_marks=100, entered_by=self.admin)
+        att = Attendance.objects.create(student=self.student, date=date.today(), status=Attendance.Status.PRESENT, marked_by=self.admin)
+        structure = FeeStructure.objects.create(classroom=self.classroom, fee_type="Tuition", amount=1000, academic_year=year)
+        payment = FeePayment.objects.create(student=self.student, fee_structure=structure, amount_due=1000, amount_paid=1000, method=FeePayment.Method.CASH, received_by=self.admin)
+
+        # Archive
+        self.student.archive()
+        self.assertFalse(self.student.is_active)
+        self.assertFalse(self.student_user.is_active)
+
+        # Confirm all historical records remain intact in database
+        self.assertTrue(Grade.objects.filter(pk=grade.pk).exists())
+        self.assertTrue(Attendance.objects.filter(pk=att.pk).exists())
+        self.assertTrue(FeePayment.objects.filter(pk=payment.pk).exists())
+        self.assertEqual(FeePayment.objects.get(pk=payment.pk).amount_paid, Decimal("1000.00"))

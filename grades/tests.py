@@ -102,3 +102,123 @@ class GradeClassSubjectSelectionTests(TestCase):
         for number in range(5): payload.update({f"grades-{number}-marks_obtained":"80",f"grades-{number}-total_marks":"100",f"grades-{number}-remarks":"good"})
         self.assertEqual(self.client.post(url,payload).status_code,302); self.assertEqual(Grade.objects.filter(subject=self.teacher1_assignments[0].subject).count(),5)
         payload["grades-0-marks_obtained"]="101"; self.assertEqual(self.client.post(url,payload).status_code,200); self.assertContains(self.client.post(url,payload),"Marks must be between")
+
+
+class GradeSecurityAndIntegrityTests(TestCase):
+    def setUp(self):
+        self.year = AcademicYear.objects.create(name="2026-SEC", start=date(2026, 1, 1), end=date(2026, 12, 31), is_current=True)
+        self.exam = Exam.objects.create(name="Midterm", academic_year=self.year, term="T1", start_date=date(2026, 3, 1))
+        self.teacher_user = User.objects.create_user("sec_teacher", role="teacher")
+        self.teacher = TeacherProfile.objects.create(user=self.teacher_user, employee_id="SEC_T1")
+        self.unprofiled_teacher = User.objects.create_user("noprofile_teacher", role="teacher")
+
+        self.class_a = Classroom.objects.create(name="9", section="A")
+        self.class_b = Classroom.objects.create(name="9", section="B")
+        self.subject = Subject.objects.create(name="Science", code="SCI")
+
+        self.assignment_a = ClassSubject.objects.create(classroom=self.class_a, subject=self.subject, teacher=self.teacher)
+
+        self.student_a1_user = User.objects.create_user("a1", role="student")
+        self.student_a1 = StudentProfile.objects.create(user=self.student_a1_user, roll_no="A01", classroom=self.class_a, admission_date=date.today())
+        self.student_a2_user = User.objects.create_user("a2", role="student")
+        self.student_a2 = StudentProfile.objects.create(user=self.student_a2_user, roll_no="A02", classroom=self.class_a, admission_date=date.today())
+
+        self.student_b1_user = User.objects.create_user("b1", role="student")
+        self.student_b1 = StudentProfile.objects.create(user=self.student_b1_user, roll_no="B01", classroom=self.class_b, admission_date=date.today())
+
+    def test_student_id_tampering_on_extra_form_is_rejected(self):
+        self.client.force_login(self.teacher_user)
+        url = reverse("grades:entry")
+        # Both a1 and a2 are missing grades.
+        # Index 0 expected a1, Index 1 expected a2.
+        # Malicious POST modifies student_id of index 0 to point to student_b1 (from class B)
+        payload = {
+            "class_subject": self.assignment_a.pk,
+            "exam": self.exam.pk,
+            "grades-TOTAL_FORMS": "2",
+            "grades-INITIAL_FORMS": "0",
+            "grades-MIN_NUM_FORMS": "0",
+            "grades-MAX_NUM_FORMS": "1000",
+            "grades-0-student_id": self.student_b1.pk,  # Tampered!
+            "grades-0-marks_obtained": "88",
+            "grades-0-total_marks": "100",
+            "grades-1-student_id": self.student_a2.pk,
+            "grades-1-marks_obtained": "75",
+            "grades-1-total_marks": "100",
+        }
+        response = self.client.post(url, payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Student ID mismatch")
+        # Crucial: NO partial save of either grade occurred
+        self.assertEqual(Grade.objects.filter(exam=self.exam).count(), 0)
+
+    def test_student_id_swapping_between_classmates_is_rejected(self):
+        self.client.force_login(self.teacher_user)
+        url = reverse("grades:entry")
+        # Swap a1 and a2 student_ids
+        payload = {
+            "class_subject": self.assignment_a.pk,
+            "exam": self.exam.pk,
+            "grades-TOTAL_FORMS": "2",
+            "grades-INITIAL_FORMS": "0",
+            "grades-MIN_NUM_FORMS": "0",
+            "grades-MAX_NUM_FORMS": "1000",
+            "grades-0-student_id": self.student_a2.pk,  # Swapped
+            "grades-0-marks_obtained": "88",
+            "grades-0-total_marks": "100",
+            "grades-1-student_id": self.student_a1.pk,  # Swapped
+            "grades-1-marks_obtained": "75",
+            "grades-1-total_marks": "100",
+        }
+        response = self.client.post(url, payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Student ID mismatch")
+        self.assertEqual(Grade.objects.filter(exam=self.exam).count(), 0)
+
+    def test_unauthorized_grade_tampering_on_existing_grade_is_rejected(self):
+        grade_a1 = Grade.objects.create(
+            student=self.student_a1, exam=self.exam, subject=self.subject,
+            marks_obtained=90, total_marks=100, entered_by=self.teacher_user
+        )
+        self.client.force_login(self.teacher_user)
+        url = reverse("grades:entry")
+        # Submit form 0 with a1's Grade ID, but tampered student_id pointing to a2
+        payload = {
+            "class_subject": self.assignment_a.pk,
+            "exam": self.exam.pk,
+            "grades-TOTAL_FORMS": "2",
+            "grades-INITIAL_FORMS": "1",
+            "grades-MIN_NUM_FORMS": "0",
+            "grades-MAX_NUM_FORMS": "1000",
+            "grades-0-id": grade_a1.pk,
+            "grades-0-student_id": self.student_a2.pk,  # Tampered!
+            "grades-0-marks_obtained": "95",
+            "grades-0-total_marks": "100",
+            "grades-1-student_id": self.student_a2.pk,
+            "grades-1-marks_obtained": "80",
+            "grades-1-total_marks": "100",
+        }
+        response = self.client.post(url, payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Student ID mismatch")
+        # Original grade preserved untouched
+        grade_a1.refresh_from_db()
+        self.assertEqual(grade_a1.marks_obtained, Decimal("90"))
+        self.assertFalse(Grade.objects.filter(student=self.student_a2).exists())
+
+    def test_missing_teacher_profile_handled_safely(self):
+        self.client.force_login(self.unprofiled_teacher)
+        # Entry page renders empty assignments safely
+        entry_resp = self.client.get(reverse("grades:entry"))
+        self.assertEqual(entry_resp.status_code, 200)
+        self.assertContains(entry_resp, "No class and subject assignments are available.")
+
+        # Attempting remarks without teacher profile raises 403, not 500
+        remarks_resp = self.client.get(reverse("grades:remarks", args=[self.student_a1.pk, self.exam.pk]))
+        self.assertEqual(remarks_resp.status_code, 403)
+
+    def test_student_and_unauthorized_teacher_forbidden_from_remarks(self):
+        self.client.force_login(self.student_a1_user)
+        # Student cannot access remarks
+        self.assertEqual(self.client.get(reverse("grades:remarks", args=[self.student_a1.pk, self.exam.pk])).status_code, 403)
+        self.assertEqual(self.client.get(reverse("grades:entry")).status_code, 403)

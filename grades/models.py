@@ -11,7 +11,7 @@ class Exam(models.Model):
     def __str__(self): return f"{self.name} ({self.term})"
 
 class Grade(models.Model):
-    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.CASCADE,related_name="grades")
+    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.PROTECT,related_name="grades")
     exam=models.ForeignKey(Exam,on_delete=models.CASCADE,related_name="grades")
     subject=models.ForeignKey("academics.Subject",on_delete=models.PROTECT)
     marks_obtained=models.DecimalField(max_digits=7,decimal_places=2)
@@ -32,7 +32,7 @@ class Grade(models.Model):
     def __str__(self): return f"{self.student} {self.subject}"
 
 class ReportCardRemark(models.Model):
-    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.CASCADE,related_name="report_remarks")
+    student=models.ForeignKey("accounts.StudentProfile",on_delete=models.PROTECT,related_name="report_remarks")
     exam=models.ForeignKey(Exam,on_delete=models.CASCADE)
     teacher_remark=models.TextField(blank=True)
     principal_remark=models.TextField(blank=True)

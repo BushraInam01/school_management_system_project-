@@ -10,6 +10,7 @@ from django.views.generic import CreateView, DeleteView, UpdateView
 
 from accounts.mixins import RoleRequiredMixin
 from accounts.downloads import protected_file_response
+from school_project.query_params import safe_int
 from academics.models import ClassSubject, Classroom
 from .forms import HomeworkForm, ReviewForm, SubmissionForm
 from .models import Homework, Submission
@@ -22,7 +23,8 @@ def teacher_homework(user):
 
 
 def teacher_can_manage(user, homework):
-    return user.role == "teacher" and homework.created_by_id == user.id and ClassSubject.objects.filter(classroom=homework.classroom, subject=homework.subject, teacher=user.teacher_profile).exists()
+    teacher = getattr(user, "teacher_profile", None)
+    return user.role == "teacher" and teacher is not None and homework.created_by_id == user.id and ClassSubject.objects.filter(classroom=homework.classroom, subject=homework.subject, teacher=teacher).exists()
 
 
 class TeacherHomeworkFormMixin(RoleRequiredMixin):
@@ -43,9 +45,10 @@ class HomeworkCreate(TeacherHomeworkFormMixin, CreateView):
     def post(self, request, *args, **kwargs):
         # Reject legacy/manipulated classroom fields as well as the scoped form choice.
         class_subject_id=request.POST.get("class_subject")
-        if request.user.role == "teacher" and class_subject_id and not ClassSubject.objects.filter(pk=class_subject_id,teacher=request.user.teacher_profile).exists(): raise PermissionDenied
+        teacher = getattr(request.user, "teacher_profile", None)
+        if request.user.role == "teacher" and (teacher is None or (class_subject_id and not ClassSubject.objects.filter(pk=class_subject_id, teacher=teacher).exists())): raise PermissionDenied
         classroom_id=request.POST.get("classroom")
-        if request.user.role == "teacher" and classroom_id and not ClassSubject.objects.filter(classroom_id=classroom_id,teacher=request.user.teacher_profile).exists(): raise PermissionDenied
+        if request.user.role == "teacher" and (teacher is None or (classroom_id and not ClassSubject.objects.filter(classroom_id=classroom_id, teacher=teacher).exists())): raise PermissionDenied
         return super().post(request,*args,**kwargs)
 
     def form_valid(self, form):
@@ -99,7 +102,8 @@ def list_homework(request):
     context = {"items": base.none()}
     if request.user.role == "admin":
         items = base.all()
-        classroom_id, status = request.GET.get("classroom"), request.GET.get("status")
+        raw_classroom, status = request.GET.get("classroom"), request.GET.get("status")
+        classroom_id = safe_int(raw_classroom, minimum=1, maximum=2_147_483_647) if raw_classroom else None
         if classroom_id: items = items.filter(classroom_id=classroom_id)
         if status: items = items.filter(submissions__status=status).distinct()
         context.update(items=items, classrooms=Classroom.objects.all(), selected_classroom=classroom_id or "", selected_status=status or "")
@@ -127,7 +131,10 @@ def list_homework(request):
         if not children:
             context["profile_message"]="No children are linked to your account yet. Please contact a school administrator."
             return render(request,"homework/list.html",context)
-        selected_child_id = request.GET.get("child")
+        raw_child_id = request.GET.get("child")
+        selected_child_id = safe_int(raw_child_id, minimum=1, maximum=2_147_483_647) if raw_child_id else None
+        if raw_child_id and not selected_child_id:
+            raise PermissionDenied
         if selected_child_id:
             children = children.filter(pk=selected_child_id)
             if not children.exists(): raise PermissionDenied
@@ -143,7 +150,10 @@ def list_homework(request):
 
 def submit(request, homework_id):
     if not request.user.is_authenticated or request.user.role != "student": raise PermissionDenied
-    student = request.user.student_profile
+    student = getattr(request.user, "student_profile", None)
+    if student is None:
+        messages.info(request, "Your student profile is not set up yet. Please contact a school administrator.")
+        return redirect("dashboard:home")
     homework = get_object_or_404(Homework.objects.select_related("classroom", "subject"), pk=homework_id, classroom=student.classroom)
     submission, _ = Submission.objects.get_or_create(homework=homework, student=student)
     if submission.status == Submission.Status.REVIEWED: raise PermissionDenied
@@ -164,9 +174,13 @@ def submission_detail(request, homework_id, submission_id):
         "homework__classroom", "homework__subject", "student__user"
     )
     if request.user.role == "student":
-        submissions = submissions.filter(student=request.user.student_profile)
+        student = getattr(request.user, "student_profile", None)
+        if not student: raise PermissionDenied
+        submissions = submissions.filter(student=student)
     elif request.user.role == "parent":
-        submissions = submissions.filter(student__parents=request.user.parent_profile)
+        parent = getattr(request.user, "parent_profile", None)
+        if not parent: raise PermissionDenied
+        submissions = submissions.filter(student__parents=parent)
     elif request.user.role == "teacher":
         submissions = submissions.filter(homework__in=teacher_homework(request.user))
     elif request.user.role != "admin":

@@ -26,7 +26,9 @@ class Command(BaseCommand):
         created=skipped=errors=0
         credentials=[]
         call_command("setup_roles",verbosity=0)
-        try: rows=list(csv.DictReader(open(options["csv_path"],newline="",encoding="utf-8")))
+        try:
+            with open(options["csv_path"], newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
         except OSError as exc: raise CommandError(str(exc))
         required={"first_name","last_name","username","email","roll_no","class_name","section","parent_username","parent_email"}
         if not rows or not required.issubset(rows[0]): raise CommandError("CSV headers do not match the required format.")
@@ -36,17 +38,53 @@ class Command(BaseCommand):
                 if User.objects.filter(username=row["username"]).exists() or StudentProfile.objects.filter(roll_no=row["roll_no"]).exists(): skipped+=1; continue
                 try: classroom=Classroom.objects.get(name=row["class_name"],section=row["section"])
                 except Classroom.DoesNotExist: self.stderr.write(f"Row {number}: classroom not found"); errors+=1; continue
-                student=User(username=row["username"],email=row["email"],first_name=row["first_name"],last_name=row["last_name"],role="student")
-                student_password=self.temporary_password(student)
-                student.set_password(student_password); student.save()
-                credentials.append((student.username,student_password))
-                profile=StudentProfile.objects.create(user=student,roll_no=row["roll_no"],classroom=classroom,admission_date=date.today())
-                parent,unused=User.objects.get_or_create(username=row["parent_username"],defaults={"email":row["parent_email"],"role":"parent"})
-                if unused:
-                    parent_password=self.temporary_password(parent)
-                    parent.set_password(parent_password); parent.save()
-                    credentials.append((parent.username,parent_password))
-                parent_profile,_=ParentProfile.objects.get_or_create(user=parent); profile.parents.add(parent_profile); created+=1
+                parent_username = row["parent_username"].strip()
+                existing_parent = User.objects.filter(username=parent_username).first()
+                if existing_parent:
+                    if existing_parent.role != User.Role.PARENT:
+                        self.stderr.write(
+                            f"Row {number}: parent username '{parent_username}' belongs to an account with incompatible role '{existing_parent.role}'"
+                        )
+                        errors += 1
+                        continue
+                    if not existing_parent.is_active:
+                        self.stderr.write(
+                            f"Row {number}: parent username '{parent_username}' belongs to an inactive account"
+                        )
+                        errors += 1
+                        continue
+                    parent = existing_parent
+                else:
+                    parent = User(
+                        username=parent_username,
+                        email=row["parent_email"].strip(),
+                        role=User.Role.PARENT,
+                    )
+                    parent_password = self.temporary_password(parent)
+                    parent.set_password(parent_password)
+                    parent.save()
+                    credentials.append((parent.username, parent_password))
+
+                student = User(
+                    username=row["username"].strip(),
+                    email=row["email"].strip(),
+                    first_name=row["first_name"].strip(),
+                    last_name=row["last_name"].strip(),
+                    role="student",
+                )
+                student_password = self.temporary_password(student)
+                student.set_password(student_password)
+                student.save()
+                credentials.append((student.username, student_password))
+                profile = StudentProfile.objects.create(
+                    user=student,
+                    roll_no=row["roll_no"].strip(),
+                    classroom=classroom,
+                    admission_date=date.today(),
+                )
+                parent_profile, _ = ParentProfile.objects.get_or_create(user=parent)
+                profile.parents.add(parent_profile)
+                created += 1
             if options["dry_run"]: transaction.set_rollback(True)
         if not options["dry_run"] and credentials:
             output=io.StringIO(newline="")

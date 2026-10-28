@@ -12,10 +12,11 @@ from django.views.generic import CreateView, DeleteView, UpdateView
 
 from accounts.mixins import RoleRequiredMixin
 from accounts.models import StudentProfile
-from academics.models import Classroom
+from academics.models import AcademicYear, Classroom
 from .forms import FeePaymentForm, FeeStructureForm
 from .models import FeePayment, FeeStructure
 from .money import CENT, money
+from school_project.query_params import safe_int
 
 
 def permitted(user, payment):
@@ -26,14 +27,63 @@ def permitted_student(user, student):
     return user.role == "admin" or (user.role == "student" and student.user_id == user.id) or (user.role == "parent" and student.parents.filter(user=user).exists())
 
 
-def fee_accounts(students, classroom=None):
+def fee_accounts(students, classroom=None, current_only=False):
+    current_year = AcademicYear.objects.filter(is_current=True).first()
+    if not current_year:
+        current_year = AcademicYear.objects.order_by("-start").first()
+
     accounts = []
     for student in students:
-        structures = FeeStructure.objects.filter(classroom=student.classroom).select_related("academic_year", "classroom").prefetch_related(Prefetch("payments", queryset=FeePayment.objects.filter(student=student), to_attr="student_payments"))
-        for structure in structures:
+        current_structures = FeeStructure.objects.filter(classroom=student.classroom)
+        if current_year:
+            current_structures = current_structures.filter(academic_year=current_year)
+        current_structures = list(
+            current_structures.select_related("academic_year", "classroom")
+            .prefetch_related(Prefetch("payments", queryset=FeePayment.objects.filter(student=student), to_attr="student_payments"))
+        )
+
+        seen_structure_ids = {s.pk for s in current_structures}
+
+        for structure in current_structures:
             paid = sum((payment.amount_paid for payment in structure.student_payments), Decimal("0.00")).quantize(CENT)
             status = FeePayment.Status.PAID if paid >= structure.amount else FeePayment.Status.PARTIAL if paid else FeePayment.Status.UNPAID
-            accounts.append({"student": student, "structure": structure, "due": structure.amount, "paid": paid, "outstanding": structure.amount - paid, "status": status, "payments": structure.student_payments})
+            accounts.append({
+                "student": student,
+                "structure": structure,
+                "due": structure.amount,
+                "paid": paid,
+                "outstanding": structure.amount - paid,
+                "status": status,
+                "payments": structure.student_payments,
+                "is_current_year": True,
+            })
+
+        if not current_only:
+            historical_payments = FeePayment.objects.filter(
+                student=student
+            ).exclude(fee_structure_id__in=seen_structure_ids).select_related("fee_structure__academic_year", "fee_structure__classroom")
+
+            historical_structures = {}
+            for payment in historical_payments:
+                struct = payment.fee_structure
+                if struct.pk not in historical_structures:
+                    historical_structures[struct.pk] = (struct, [])
+                historical_structures[struct.pk][1].append(payment)
+
+            for struct_id, (structure, payments) in historical_structures.items():
+                paid = sum((payment.amount_paid for payment in payments), Decimal("0.00")).quantize(CENT)
+                status = FeePayment.Status.PAID if paid >= structure.amount else FeePayment.Status.PARTIAL if paid else FeePayment.Status.UNPAID
+                outstanding = structure.amount - paid
+                accounts.append({
+                    "student": student,
+                    "structure": structure,
+                    "due": structure.amount,
+                    "paid": paid,
+                    "outstanding": outstanding,
+                    "status": status,
+                    "payments": payments,
+                    "is_current_year": False,
+                })
     return accounts
 
 
@@ -72,7 +122,8 @@ class PaymentCreate(AdminOnly, CreateView):
 
 def summary(request):
     if not request.user.is_authenticated or request.user.role != "admin": raise PermissionDenied
-    classroom_id, selected_status = request.GET.get("classroom"), request.GET.get("status", "")
+    raw_classroom_id, selected_status = request.GET.get("classroom"), request.GET.get("status", "")
+    classroom_id = safe_int(raw_classroom_id, minimum=1, maximum=2_147_483_647) if raw_classroom_id else None
     students = StudentProfile.objects.select_related("user", "classroom")
     if classroom_id: students = students.filter(classroom_id=classroom_id)
     accounts = fee_accounts(students)
@@ -101,7 +152,9 @@ def list_fees(request):
     if request.user.role == "parent":
         parent = getattr(request.user, "parent_profile", None)
         children = parent.children.all() if parent else StudentProfile.objects.none()
-        child = children.filter(pk=request.GET.get("child")).first() or children.first()
+        raw_child = request.GET.get("child")
+        child_id = safe_int(raw_child, minimum=1, maximum=2_147_483_647) if raw_child else None
+        child = children.filter(pk=child_id).first() if child_id else children.first()
         if child: return redirect("fees:student", student_id=child.pk)
         messages.info(request, "No children are linked to your account yet. Please contact a school administrator.")
         return redirect("dashboard:home")
